@@ -1,0 +1,116 @@
+YLR075W YPR102C YGR085C YEL054C YDR418W YDL082W YMR142C YHL001W YLR029C YIL133C YNL069C YKL180W YJL177W YOL120C YNL301C YBR084C-A YBL027W YPL220W YGL135W YMR242C YOR312C YBR191W YBL087C YER117W YGL031C YOL127W YLR344W YGR034W YHR010W YDR471W YGL103W YFR032C-A YFR031C-A YIL018W YOR063W YGL030W YDL075W YLR406C YBL092W YPL143W YOR234C YDL136W YMR194W YPL249C-A YLR325C YHR141C YJR094W-A YBR031W YDR012W YPL131W YML073C YLR448W YGL076C YPL198W YHL033C YLL045C YGL147C YNL067W YLR340W YDL081C YOL039W YDR382W
+YMR116C YGR214W YLR048W YMR230W YDR025W YBR048W YDR064W YCR031C YJL191W YOL040C YMR143W YDL083C YML024W YDR447C YDR450W YML026C YNL302C YLR441C YML063W YGL123W YHL015W YJL190C YLR367W YGR118W YER074W YIL069C YGR027C YGL189C YER131W YLR264W YNL178W YLR287C-A YJR145C YHR203C YJR123W YPL090C YBR181C YOR096W YNL096C YBL072C YER102W YPL081W YBR189W                   
+YCR046C YCR071C YDR405W YKL167C YNL005C YDR116C YNL284C YKR006C YLR312W-A YBL038W YNL252C YKR085C YNL177C YOR150W YMR193W YGR076C YBR282W YDR462W YMR024W YDR322W YBR122C YML009C YLR439W YHR147C YDR237W YJL063C YGR220C YML025C                                  
+YDR347W YDL045W-A YGR084C YKL003C YBL090W YHL004W YPL118W YPL013C YMR188C YNL306W YDR337W YGR165W YBR251W YMR158W YBR146W YNL137C YOR158W YDR041W YER050C YNR037C YKL155C YGL129C YDR175C YIL093C YJR101W YGR215W YJR113C YNL081C                                  
+YER172C YPR082C YBL026W YLR438C-A YER112W YER146W YDR378C YNL147W YJR022W YDR473C YGR091W YGR075C YPR178W YBR055C YHR165C YER029C YGR074W YLR275W YLR147C YOR159C YFL017W-A YPR182W YKL173W YEL026W YDL098C YOR308C YBR152W                                   
+YPL042C YNL025C YCR081W YDR443C YNR010W YOL051W YPR070W YMR112C YDL005C YOR174W YHR058C YOL135C YBR193C YGL151W YPR168W YGL025C YLR071C YBL093C YNL236W YHR041C YER022W YGR104C YBR253W YDR308C YGL127C                                     
+YDR363W-A YHL030W YFR010W YGR232W YHR027C YHR200W YFR004W YFR052W YLR421C YIL075C YER021W YDL147W YDL097C YPR108W YOR261C YDR427W YKL145W YDL007W YDR394W YOR259C YOR117W YGL048C                                        
+YPL178W YMR125W YER029C YGR074W YLR275W YLR147C YOR159C YFL017W-A YPR182W YDL087C YBR119W YHR086W YML046W YKL012W YDR235W YIL061C YDR240C YGR013W YLR298C                                           
+YDR448W YER164W YGR252W YPL254W YDR176W YPL047W YCL010C YGL066W YOL148C YDR392W YBR081C YLR055C YDR167W YDR145W YBR198C YGL112C YMR236W YHR099W YMR223W                                           
+YPL213W YIR009W YML049C YMR288W YOR319W YDL030W YDL043C YJL203W YMR240C YNL286W YER029C YGR074W YLR275W YLR147C YOR159C YFL017W-A YPR182W                                             
+YOR207C YOR210W YBR154C YOR224C YHR143W-A YDR045C YJL011C YNL113W YKL144C YNL151C YNR003C YKR025W YPR110C YDL150W YPR190C YPR187W YOR116C                                             
+YPR034W YMR033W YCR020W-B YMR091C YGR056W YLR357W YDR303C YHR056C YKR008W YLR033W YCR052W YFR037C YML127W YGR275W YLR321C YIL126W                                              
+YDR448W YER164W YGR252W YPL254W YDR176W YGL252C YGL066W YOL148C YDR392W YBR081C YDR167W YDR145W YBR198C YGL112C YMR236W YHR099W YMR223W                                             
+YER029C YGR074W YLR275W YLR147C YOR159C YFL017W-A YPR182W YDL087C YBR119W YHR086W YML046W YKL012W YDR235W YIL061C YDR240C YGR013W YLR298C                                             
+YDR301W YLR115W YJR093C YER133W YKL059C YKR002W YNL317W YAL043C YGR156W YDR195W YNL222W YKL018W YOR179C YLR277C YPR107C                                               
+YER148W YGR274C YDR167W YML015C YDR145W YML098W YPL129W YCR042C YPL011C YMR005W YBR198C YGL112C YMR227C YML114C YMR236W                                               
+YER012W YOR362C YPR103W YJL001W YFR050C YMR314W YOL038W YBL041W YML092C YGR135W YOR157C YGR253C YER094C YGL011C                                                
+YJR063W YPR010C YDR156W YOR341W YJL148W YOR340C YNL248C YOR210W YBR154C YOR224C YHR143W-A YNL113W YPR110C YPR187W                                                
+YER029C YGR074W YLR275W YLR147C YOR159C YFL017W-A YPR182W YKL173W YBL074C YER172C YHR165C YHR156C YPR082C                                                 
+YDL185W YHR039C-A YPR036W YBR127C YOR332W YKL080W YLR447C YGR020C YEL051W YOR270C                                                    
+YFL039C YJL081C YPR023C YEL018W YJR082C YNL136W YFL024C YOR244W YGR002C YHR099W YDR359C YNL107W YHR090C                                                 
+YFL039C YJL081C YLR085C YDR190C YPL235W YAL011W YGR002C YBR231C YLR385C YDR334W YML041C YDR485C YNL107W                                                 
+YDL185W YHR039C-A YPR036W YBR127C YOR332W YKL080W YLR447C YGR020C YEL051W                                                     
+YOR210W YOL005C YOR151C YIL021W YJL140W YBR154C YDR404C YOR224C YGL070C YHR143W-A YDL140C YPR187W                                                  
+YFL039C YJL081C YNL059C YOR141C YFL013C YLR052W YGL150C YDL002C YDR190C YPL235W YPL129W                                                   
+YPR034W YMR033W YGR275W YDR073W YNR023W YOR290C YBR289W YHL025W YPL016W YJL176C YPL129W YFL049W                                                  
+YPL181W YAL013W YNL097C YNL330C YBR095C YDL076C YMR263W YIL084C YOL004W YPL139C YDR207C                                                   
+YNL232W YOL021C YHR081W YGR158C YHR069C YOL142W YDL111C YCR035C YDR280W YGR095C YOR001W YGR195W                                                  
+YKR068C YML077W YDR108W YGR166W YDR407C YMR218C YBR254C YDR246W YDR472W YOR115C                                                    
+YNL232W YOL021C YGR158C YHR069C YOL142W YDL111C YCR035C YDR280W YGR095C YGR195W                                                    
+YBL026W YLR438C-A YER112W YER146W YDR378C YNL147W YJR022W YMR268C                                                      
+YBR009C YNL030W YBR010W YNL031C YDR225W YBL003C YDR224C YBL002W                                                      
+YIL142W YDL143W YDR188W YJL111W                                                          
+YDR255C YMR135C YBR105C YIL017C YGL227W YIL097W                                                        
+YDL145C YER122C YFR051C YPL010W YNL287W YDR238C YGL137W YIL076W                                                      
+YER025W YMR309C YOR361C YNL244C YJR007W YPL237W YMR146C YPR041W                                                      
+YLL036C YMR213W YJR050W YLR117C YDR416W YPR101W                                                        
+YLR015W YDR469W YHR119W YBR258C YPL138C YAR003W YKL018W YBR175W                                                      
+YMR012W YLR192C YMR309C YOR361C YBR079C YMR146C YDR429C                                                       
+YLR418C YOL145C YDR138W YOR123C YBR279W YGL244W                                                        
+YEL055C YPL126W YDR324C YGR128C YHR196W YJL109C YMR093W                                                       
+YGL194C YIL112W YDR155C YOL068C YKR029C YBR103W YCR033W                                                       
+YML105C YDL092W YKL122C YPR088C YPL243W YPL210C                                                        
+YMR240C YMR288W YOR319W YML049C                                                          
+YCL031C YGR090W YIL035C YOR061W YGL019W YOR039W                                                        
+YLR129W YCR057C YDR449C YLR222C YJL069C YLR409C                                                        
+YMR025W YJR084W YDR179C YIL071C YDL216C YOL117W                                                        
+YDR448W YGR252W YPL254W YDR176W                                                          
+YPL048W YAL003W YPR080W YBR118W YKL081W                                                         
+YDR054C YDL132W YDR328C                                                           
+YJR082C YPL129W                                                            
+YOL144W YLR221C YKL014C YJR041C                                                          
+YEL036C YJR075W YDR245W YJL183W YPL050C                                                         
+YPR023C YMR075W YNL330C YOL004W YPL139C                                                         
+YOR250C YDR228C YMR061W YGL044C                                                          
+YOR260W YGR083C YDR211W YLR291C YKR026C                                                         
+YJL065C YDR121W YOR304W YGL133W                                                          
+YOR310C YDL014W YEL026W YLR197W                                                          
+YPR175W YBR278W YDR121W YNL262W                                                          
+YDL132W YDR328C                                                            
+YDR138W YML062C YNL139C YHR167W                                                          
+YIL035C YOR061W YGL019W YOR039W                                                          
+YMR186W YCL037C YNL064C                                                           
+YOR039W YLR223C YCL031C YGR090W                                                          
+YDL043C YJL203W YDL030W                                                           
+YDL175C YJL050W YOL115W                                                           
+YDR075W YNL201C YBL046W                                                           
+YDR422C YDR477W YGL115W                                                           
+YOL139C YKR059W YGR162W                                                           
+YPL037C YHR193C                                                            
+YHR013C YDL040C YOR253W                                                           
+YLR398C YPR189W YGL213C                                                           
+YPL129W YGR186W YGR005C                                                           
+YJR033C YDR202C YDR328C                                                           
+YER025W YJR007W YPL237W                                                           
+YPL001W YEL056W YLL022C                                                           
+YDR224C YOL012C                                                            
+YAR007C YNL312W YJL173C                                                           
+YER027C YDR477W YGL115W                                                           
+YGL105W YGL245W YGR264C                                                           
+YGL246C YOR048C YDR289C                                                           
+YDL084W YNL253W YDR381W                                                           
+YGL208W YDR477W YGL115W                                                           
+YLR424W YKR022C YGL120C                                                           
+YHR085W YNL182C YHR197W                                                           
+YJL050W YOL115W                                                            
+YML057W YLR433C YKL190W                                                           
+YOL090W YDR097C                                                            
+YJL115W YPL153C                                                            
+YPR144C YDL148C                                                            
+YOL149W YNL118C                                                            
+YGL195W YFR009W                                                            
+YCR009C YDR388W                                                            
+YPL004C YGR086C                                                            
+YPL219W YPL031C                                                            
+YJL005W YNL138W                                                            
+YGR132C YGR231C                                                            
+YOL090W YCR092C                                                            
+YGR063C YML010W                                                            
+YML069W YGL207W                                                            
+YGR240C YMR205C                                                            
+YNL233W YER133W                                                            
+YMR192W YPL249C                                                            
+YNL037C YOR136W                                                            
+YKL182W YPL231W                                                            
+YDR028C YER133W                                                            
+YOR303W YJR109C                                                            
+YOR206W YLR002C                                                            
+YDR060W YOR206W                                                            
+YOL001W YPL031C                                                            
+YAR014C YER133W                                                            
+YHR064C YGR285C                                                            
+YDR172W YBR143C                                                            
+YFR013W YBR245C                                                            
+YPL082C YER148W                                                            
+YKL193C YER133W                                                            
