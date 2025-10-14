@@ -16,9 +16,21 @@ from typing_extensions import Self
 
 
 def parse_cors(v: Any) -> list[str] | str:
+    def normalize(origin: str) -> str:
+        value = origin.strip()
+        if not value:
+            return value
+        if "://" in value:
+            return value
+        if value.startswith("localhost") or value.startswith("127.0.0.1"):
+            return f"http://{value}"
+        return f"https://{value}"
+
     if isinstance(v, str) and not v.startswith("["):
-        return [i.strip() for i in v.split(",") if i.strip()]
-    elif isinstance(v, list | str):
+        return [normalize(i) for i in v.split(",") if i.strip()]
+    elif isinstance(v, list):
+        return [normalize(str(i)) for i in v if str(i).strip()]
+    elif isinstance(v, str):
         return v
     raise ValueError(v)
 
