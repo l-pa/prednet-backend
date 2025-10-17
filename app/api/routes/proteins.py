@@ -1,10 +1,10 @@
 import os
 import csv
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
-from app.api.routes.networks import parse_gdf_to_cytoscape
+from app.api.routes.networks import parse_gdf_to_cytoscape, _load_sgd_sys_to_gene_map
 
 
 router = APIRouter(tags=["proteins"], prefix="/proteins")
@@ -49,7 +49,7 @@ def _strip_quotes(value: str) -> str:
     return value
 
 
-def _collect_proteins_from_gdf(file_path: str) -> dict[str, set[str]]:
+def _collect_proteins_from_gdf(file_path: str, *, name_mode: Literal["systematic", "gene"], sgd_map: dict[str, str]) -> dict[str, set[str]]:
     """Parse a GDF file and return a mapping of protein token -> set of types seen.
 
     Determine indices for 'label' and optional 'type'. For each node line before
@@ -103,15 +103,15 @@ def _collect_proteins_from_gdf(file_path: str) -> dict[str, set[str]]:
                         if type_index is not None and type_index < len(row):
                             type_val = _strip_quotes(row[type_index].strip())
                         if label_val:
-                            for token in label_val.split():
-                                token_clean = token.strip()
+                            base = [tok.strip() for tok in label_val.split() if tok.strip()]
+                            mapped = [sgd_map.get(t.upper(), t) for t in base] if name_mode == "gene" else base
+                            for token_clean in mapped:
                                 if token_clean:
                                     if token_clean not in token_to_types:
                                         token_to_types[token_clean] = set()
                                     if type_val:
                                         token_to_types[token_clean].add(type_val)
                                     else:
-                                        # Ensure the token exists even if no type
                                         _ = token_to_types[token_clean]
     return token_to_types
 
@@ -123,6 +123,7 @@ def get_proteins(
     size: int = Query(50, ge=1, le=500),
     q: str | None = Query(default=None, description="Space-separated protein names to filter by"),
     selected: str | None = Query(default=None, description="Space-separated selected proteins; return only proteins that co-occur in same components across files"),
+    name_mode: Literal["systematic", "gene"] = Query("systematic"),
 ) -> Any:
     """
     Aggregate unique proteins across all GDFs in a network.
@@ -135,14 +136,15 @@ def get_proteins(
         dir_path = _read_network_dir(network_name)
         gdf_files = _iter_gdf_files(dir_path)
 
+        sgd_map = _load_sgd_sys_to_gene_map()
         protein_to_files: dict[str, set[str]] = {}
         protein_to_types: dict[str, set[str]] = {}
 
         for filename in gdf_files:
             file_path = os.path.join(dir_path, filename)
             try:
-                token_types_map = _collect_proteins_from_gdf(file_path)
-            except Exception as e:
+                token_types_map = _collect_proteins_from_gdf(file_path, name_mode=name_mode, sgd_map=sgd_map)
+            except Exception:
                 # Skip malformed files but continue processing others
                 # Alternatively, raise a 500; here we choose resilience
                 token_types_map = {}
@@ -165,7 +167,7 @@ def get_proteins(
                 for filename in gdf_files:
                     file_path = os.path.join(dir_path, filename)
                     try:
-                        node_ids, edges, node_to_tokens, _ = _parse_nodes_and_edges(file_path)
+                        node_ids, edges, node_to_tokens, _ = _parse_nodes_and_edges(file_path, name_mode=name_mode, sgd_map=sgd_map)
                         node_to_comp, _comp_sizes = _compute_components(node_ids, edges)
                     except Exception:
                         continue
@@ -180,7 +182,7 @@ def get_proteins(
                             comp_to_tokens[cid] = set()
                         comp_to_tokens[cid].update(tokens)
                     # Keep only components that contain ALL selected tokens
-                    for cid, tokens_in_comp in comp_to_tokens.items():
+                    for _cid, tokens_in_comp in comp_to_tokens.items():
                         if selected_set.issubset(tokens_in_comp):
                             allowed_tokens.update(tokens_in_comp)
 
@@ -206,8 +208,8 @@ def get_proteins(
         paged = all_proteins[start:end]
         items = []
         for p in paged:
-            files_sorted = sorted(list(protein_to_files.get(p, set())))
-            types_sorted = sorted(list(protein_to_types.get(p, set())))
+            files_sorted = sorted(protein_to_files.get(p, set()))
+            types_sorted = sorted(protein_to_types.get(p, set()))
             items.append(ProteinItem(protein=p, files=files_sorted, types=types_sorted))
 
         return PagedProteins(items=items, total=total, page=page, size=size)
@@ -219,6 +221,7 @@ def get_proteins(
 
 class ComponentsRequest(BaseModel):
     proteins: list[str]
+    name_mode: Literal["systematic", "gene"] | None = None
 
 
 class ComponentEntry(BaseModel):
@@ -238,7 +241,7 @@ class ComponentsResponse(BaseModel):
     files: list[FileComponents]
 
 
-def _parse_nodes_and_edges(file_path: str) -> tuple[list[str], list[tuple[str, str]], dict[str, set[str]], dict[str, str]]:
+def _parse_nodes_and_edges(file_path: str, *, name_mode: Literal["systematic", "gene"], sgd_map: dict[str, str]) -> tuple[list[str], list[tuple[str, str]], dict[str, set[str]], dict[str, str]]:
     node_ids: list[str] = []
     edges: list[tuple[str, str]] = []
     node_to_tokens: dict[str, set[str]] = {}
@@ -300,10 +303,11 @@ def _parse_nodes_and_edges(file_path: str) -> tuple[list[str], list[tuple[str, s
                         label_val = _strip_quotes(row[label_index].strip())
                         node_to_label[node_id] = label_val
                         if label_val:
-                            for token in label_val.split():
-                                token_clean = token.strip()
-                                if token_clean:
-                                    tokens.add(token_clean)
+                            base_tokens = [tok.strip() for tok in label_val.split() if tok.strip()]
+                            if name_mode == "gene":
+                                tokens = {sgd_map.get(t.upper(), t) for t in base_tokens}
+                            else:
+                                tokens = set(base_tokens)
                     node_to_tokens[node_id] = tokens
                 continue
             if in_edges and edge_attr_names and node1_index is not None and node2_index is not None:
@@ -362,6 +366,8 @@ def _compute_components(node_ids: list[str], edges: list[tuple[str, str]]) -> tu
 def get_components_membership(network_name: str, body: ComponentsRequest) -> Any:
     try:
         dir_path = _read_network_dir(network_name)
+        name_mode: Literal["systematic", "gene"] = body.name_mode or "systematic"
+        sgd_map = _load_sgd_sys_to_gene_map()
         gdf_files = _iter_gdf_files(dir_path)
         requested: set[str] = set(body.proteins or [])
 
@@ -369,7 +375,7 @@ def get_components_membership(network_name: str, body: ComponentsRequest) -> Any
         for filename in gdf_files:
             file_path = os.path.join(dir_path, filename)
             try:
-                node_ids, edges, node_to_tokens, _node_to_label = _parse_nodes_and_edges(file_path)
+                node_ids, edges, node_to_tokens, _node_to_label = _parse_nodes_and_edges(file_path, name_mode=name_mode, sgd_map=sgd_map)
             except Exception:
                 # Skip malformed files
                 files_out.append(FileComponents(filename=filename, components=[]))
@@ -401,7 +407,7 @@ def get_components_membership(network_name: str, body: ComponentsRequest) -> Any
                 # Only include components containing ALL requested proteins
                 if requested and not requested.issubset(tokens_in_comp):
                     continue
-                present_selected = sorted(list(requested.intersection(tokens_in_comp)))
+                present_selected = sorted(requested.intersection(tokens_in_comp))
                 components.append(
                     ComponentEntry(
                         component_id=cid,
@@ -435,7 +441,12 @@ class SubgraphGraph(BaseModel):
 
 
 @router.get("/{network_name}/components/{filename}/{component_id}", response_model=SubgraphGraph)
-def get_component_subgraph(network_name: str, filename: str, component_id: int) -> Any:
+def get_component_subgraph(
+    network_name: str,
+    filename: str,
+    component_id: int,
+    name_mode: Literal["systematic", "gene"] = Query("systematic"),
+) -> Any:
     try:
         dir_path = _read_network_dir(network_name)
         file_path = os.path.join(dir_path, filename)
@@ -443,7 +454,10 @@ def get_component_subgraph(network_name: str, filename: str, component_id: int) 
             raise HTTPException(status_code=404, detail=f"File '{filename}' not found")
 
         # Compute component membership to know which node ids to include
-        node_ids, edges, _node_to_tokens, _node_to_label = _parse_nodes_and_edges(file_path)
+        sgd_map = _load_sgd_sys_to_gene_map()
+        node_ids, edges, _node_to_tokens, _node_to_label = _parse_nodes_and_edges(
+            file_path, name_mode=name_mode, sgd_map=sgd_map
+        )
         node_to_comp, _ = _compute_components(node_ids, edges)
         comp_nodes = {n for n in node_ids if node_to_comp.get(n) == component_id}
 

@@ -39,6 +39,8 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_ignore_empty=True,
         extra="ignore",
+        env_file="../.env",
+
     )
     API_V1_STR: str = "/api/v1"
     SECRET_KEY: str = secrets.token_urlsafe(32)
