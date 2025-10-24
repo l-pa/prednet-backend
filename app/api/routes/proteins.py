@@ -1,13 +1,16 @@
-import os
 import csv
+import logging
+import os
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
-from app.api.routes.networks import parse_gdf_to_cytoscape, _load_sgd_sys_to_gene_map
+
+from app.api.routes.networks import _load_sgd_sys_to_gene_map, parse_gdf_to_cytoscape
 
 
 router = APIRouter(tags=["proteins"], prefix="/proteins")
+logger = logging.getLogger(__name__)
 
 
 class ProteinItem(BaseModel):
@@ -192,12 +195,24 @@ def get_proteins(
                 # Intersect proteins with allowed tokens
                 all_proteins = [p for p in all_proteins if p in allowed_tokens]
 
-        # Optional filtering by space-separated exact tokens
+        # Optional filtering by space-separated partial tokens (case-insensitive)
         if q:
-            terms = [t for t in (q.split() if q else []) if t]
+            logger.info(f"Searching for proteins: {q}")
+            terms = [t.strip().lower() for t in (q.split() if q else []) if t.strip()]
             if terms:
-                term_set = set(terms)
-                all_proteins = [p for p in all_proteins if p in term_set]
+                # Filter proteins that contain any of the search terms in either systematic or gene names
+                filtered_proteins = []
+                for p in all_proteins:
+                    # Check if any search term matches the protein name (case-insensitive)
+                    protein_lower = p.lower()
+                    gene_name = sgd_map.get(p.upper(), p)
+                    gene_name_lower = gene_name.lower()
+
+                    # Check if any term matches either the systematic name or gene name
+                    if any(term in protein_lower for term in terms) or any(term in gene_name_lower for term in terms):
+                        filtered_proteins.append(p)
+
+                all_proteins = filtered_proteins
         total = len(all_proteins)
 
         start = (page - 1) * size
