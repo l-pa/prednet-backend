@@ -504,3 +504,113 @@ def get_component_subgraph(
         raise HTTPException(status_code=500, detail=f"Error building subgraph: {str(e)}")
 
 
+class ComponentSummary(BaseModel):
+    filename: str
+    component_id: int
+    size: int
+    edges: int
+    proteins_count: int
+
+
+class PagedComponents(BaseModel):
+    items: list[ComponentSummary]
+    total: int
+    page: int
+    size: int
+
+
+@router.get("/{network_name}/components/search", response_model=PagedComponents)
+def search_components_by_id(
+    network_name: str,
+    page: int = Query(1, ge=1),
+    size: int = Query(50, ge=1, le=500),
+    q: str | None = Query(default=None, description="Search by component ID (exact number or digits)"),
+    file: str | None = Query(default=None, description="Optional GDF filename to filter"),
+    name_mode: Literal["systematic", "gene"] = Query("systematic"),
+) -> Any:
+    try:
+        dir_path = _read_network_dir(network_name)
+        sgd_map = _load_sgd_sys_to_gene_map()
+
+        files = []
+        if file:
+            # Validate file exists
+            candidate = os.path.join(dir_path, file)
+            if not os.path.exists(candidate):
+                raise HTTPException(status_code=404, detail=f"File '{file}' not found")
+            files = [file]
+        else:
+            files = list(_iter_gdf_files(dir_path))
+
+        summaries: list[ComponentSummary] = []
+
+        for filename in files:
+            file_path = os.path.join(dir_path, filename)
+            try:
+                node_ids, edges, node_to_tokens, _ = _parse_nodes_and_edges(file_path, name_mode=name_mode, sgd_map=sgd_map)
+            except Exception:
+                # Skip malformed files
+                continue
+
+            node_to_comp, comp_sizes = _compute_components(node_ids, edges)
+
+            # Build per-component token sets and edge counts
+            comp_to_tokens: dict[int, set[str]] = {}
+            comp_to_edges_count: dict[int, int] = {}
+            for node_id, tokens in node_to_tokens.items():
+                cid = node_to_comp.get(node_id)
+                if cid is None:
+                    continue
+                if cid not in comp_to_tokens:
+                    comp_to_tokens[cid] = set()
+                comp_to_tokens[cid].update(tokens)
+            for a, b in edges:
+                ca = node_to_comp.get(a)
+                cb = node_to_comp.get(b)
+                if ca is not None and cb is not None and ca == cb:
+                    comp_to_edges_count[ca] = comp_to_edges_count.get(ca, 0) + 1
+
+            # Filter by q
+            q_str = (q or "").strip()
+            q_int: int | None = None
+            if q_str and q_str.isdigit():
+                try:
+                    q_int = int(q_str)
+                except Exception:
+                    q_int = None
+
+            for cid, tokens in comp_to_tokens.items():
+                if q_str:
+                    if q_int is not None:
+                        if cid != q_int:
+                            continue
+                    else:
+                        # substring match on digits representation
+                        if q_str not in str(cid):
+                            continue
+
+                summaries.append(
+                    ComponentSummary(
+                        filename=filename,
+                        component_id=cid,
+                        size=comp_sizes.get(cid, 0),
+                        edges=comp_to_edges_count.get(cid, 0),
+                        proteins_count=len(tokens),
+                    )
+                )
+
+        # Sort consistently by file then id
+        summaries.sort(key=lambda s: (s.filename, s.component_id))
+
+        total = len(summaries)
+        start = (page - 1) * size
+        end = start + size
+        if start >= total and total != 0:
+            raise HTTPException(status_code=400, detail="Page out of range")
+
+        paged = summaries[start:end]
+        return PagedComponents(items=paged, total=total, page=page, size=size)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error searching components: {str(e)}")

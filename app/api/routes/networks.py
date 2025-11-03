@@ -32,6 +32,13 @@ class NodeSize(BaseModel):
     width: float
     height: float
 
+class SGDDetailsRequest(BaseModel):
+    tokens: list[str]
+
+class SGDDetailsItem(BaseModel):
+    token: str
+    gene_name: str
+
 
 @router.get("/", response_model=list[NetworkInfo])
 def get_networks() -> Any:
@@ -272,6 +279,26 @@ def parse_gdf_to_cytoscape(gdf_content: str) -> CytoscapeGraph:
                 nodes.append(CytoscapeNode(data=node_info))
 
     return CytoscapeGraph(nodes=nodes, edges=edges)
+
+
+@router.post("/sgd/details", response_model=list[SGDDetailsItem])
+def get_sgd_details(body: SGDDetailsRequest) -> Any:
+    """
+    Return basic SGD mapping details for the provided tokens.
+    Maps systematic token to gene name where available using SGD_features.tab.
+    """
+    try:
+        mapping = _load_sgd_sys_to_gene_map()
+        out: list[SGDDetailsItem] = []
+        for t in (body.tokens or []):
+            tok = (t or "").strip()
+            if not tok:
+                continue
+            gene = mapping.get(tok.upper(), tok)
+            out.append(SGDDetailsItem(token=tok, gene_name=gene))
+        return out
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error reading SGD details: {str(e)}")
 
 
 @router.get("/{network_name}/gdf/{filename}", response_model=CytoscapeGraph)
@@ -545,6 +572,9 @@ class ComponentProteinCount(BaseModel):
     type_ratios: dict[str, float] | None = None
     # in how many other components (graph/file scope) this protein also appears
     other_components: int | None = None
+    # in how many distinct components across the entire network (all GDF files)
+    # this protein appears (excluding the current component when applicable)
+    other_components_network: int | None = None
 
 
 class ByNodeRequest(BaseModel):
@@ -806,6 +836,136 @@ def get_component_proteins_by_node(req: ByNodeRequest) -> Any:
             token_to_comp_set_file = None
             target_file_cid = None
 
+        # Optionally, compute token -> distinct (file, component) pairs across the entire network
+        token_to_net_comp_pairs: dict[str, set[tuple[str, int]]] | None = None
+        current_file_comp_pair: tuple[str, int] | None = None
+        try:
+            if req.network:
+                current_dir = os.path.dirname(os.path.abspath(__file__))
+                network_dir = os.path.join(current_dir, "..", "..", "data", str(req.network))
+                network_dir = os.path.abspath(network_dir)
+                if os.path.isdir(network_dir):
+                    token_to_net_comp_pairs = {}
+                    import glob as _glob
+                    import csv as _csv
+                    for gdf_path in _glob.glob(os.path.join(network_dir, "*.gdf")):
+                        # minimal parse per file
+                        node_ids_n: list[str] = []
+                        edges_n: list[tuple[str, str]] = []
+                        node_to_tokens_n: dict[str, set[str]] = {}
+                        try:
+                            with open(gdf_path, encoding="utf-8") as fh:
+                                in_nodes = False
+                                in_edges = False
+                                node_attr_names: list[str] = []
+                                edge_attr_names: list[str] = []
+                                label_index: int | None = None
+                                id_index: int | None = None
+                                node1_index: int | None = None
+                                node2_index: int | None = None
+                                for raw_line in fh:
+                                    line = raw_line.strip()
+                                    if not line:
+                                        continue
+                                    if line.startswith("nodedef>"):
+                                        in_nodes = True
+                                        in_edges = False
+                                        header = line[len("nodedef>") :]
+                                        parts = [part.strip() for part in header.split(",")]
+                                        node_attr_names = []
+                                        for p in parts:
+                                            first = p.split()[0]
+                                            first = first.split(":")[0]
+                                            node_attr_names.append(first)
+                                        label_index = node_attr_names.index("label") if "label" in node_attr_names else (node_attr_names.index("name") if "name" in node_attr_names else None)
+                                        id_index = node_attr_names.index("name") if "name" in node_attr_names else (node_attr_names.index("id") if "id" in node_attr_names else 0)
+                                        continue
+                                    if line.startswith("edgedef>"):
+                                        in_nodes = False
+                                        in_edges = True
+                                        header = line[len("edgedef>") :]
+                                        parts = [part.strip() for part in header.split(",")]
+                                        edge_attr_names = []
+                                        for p in parts:
+                                            first = p.split()[0]
+                                            first = first.split(":")[0]
+                                            edge_attr_names.append(first)
+                                        node1_index = edge_attr_names.index("node1") if "node1" in edge_attr_names else None
+                                        node2_index = edge_attr_names.index("node2") if "node2" in edge_attr_names else None
+                                        continue
+                                    if in_nodes and node_attr_names:
+                                        for row in _csv.reader([line], delimiter=",", quotechar="'", skipinitialspace=True):
+                                            if id_index is None or id_index >= len(row):
+                                                continue
+                                            nid_v = str(row[id_index].strip().strip("'"))
+                                            node_ids_n.append(nid_v)
+                                            tokens_set_n: set[str] = set()
+                                            if label_index is not None and label_index < len(row):
+                                                label_val = row[label_index].strip().strip("'")
+                                                if label_val:
+                                                    base_tokens = {tok.strip() for tok in label_val.split() if tok.strip()}
+                                                    if name_mode == "gene":
+                                                        tokens_set_n = {sgd_map.get(t.upper(), t) for t in base_tokens}
+                                                    else:
+                                                        tokens_set_n = base_tokens
+                                            node_to_tokens_n[nid_v] = tokens_set_n
+                                        continue
+                                    if in_edges and edge_attr_names and node1_index is not None and node2_index is not None:
+                                        for row in _csv.reader([line], delimiter=",", quotechar="'", skipinitialspace=True):
+                                            if node1_index < len(row) and node2_index < len(row):
+                                                n1 = row[node1_index].strip().strip("'")
+                                                n2 = row[node2_index].strip().strip("'")
+                                                if n1 and n2:
+                                                    edges_n.append((str(n1), str(n2)))
+                        except Exception:
+                            continue
+
+                        # union-find per file
+                        parent_n: dict[str, str] = {n: n for n in node_ids_n}
+                        size_n: dict[str, int] = {n: 1 for n in node_ids_n}
+                        def find_n(x: str) -> str:
+                            while parent_n[x] != x:
+                                parent_n[x] = parent_n[parent_n[x]]
+                                x = parent_n[x]
+                            return x
+                        def union_n(a: str, b: str) -> None:
+                            if a not in parent_n or b not in parent_n:
+                                return
+                            ra, rb = find_n(a), find_n(b)
+                            if ra == rb:
+                                return
+                            if size_n[ra] < size_n[rb]:
+                                ra, rb = rb, ra
+                            parent_n[rb] = ra
+                            size_n[ra] += size_n[rb]
+                        for a, b in edges_n:
+                            union_n(a, b)
+                        root_to_comp_n: dict[str, int] = {}
+                        node_to_comp_n: dict[str, int] = {}
+                        next_id_n = 0
+                        for n in node_ids_n:
+                            r = find_n(n)
+                            if r not in root_to_comp_n:
+                                root_to_comp_n[r] = next_id_n
+                                next_id_n += 1
+                            node_to_comp_n[n] = root_to_comp_n[r]
+
+                        # fill token -> (file, comp) pairs
+                        file_name = os.path.basename(gdf_path)
+                        for nid_n, toks in node_to_tokens_n.items():
+                            cidn = node_to_comp_n.get(nid_n)
+                            if cidn is None:
+                                continue
+                            for tok in toks:
+                                token_to_net_comp_pairs.setdefault(tok, set()).add((file_name, cidn))
+
+                    # current component pair for exclusion when available
+                    if req.filename and target_file_cid is not None:
+                        current_file_comp_pair = (str(req.filename), int(target_file_cid))
+        except Exception:
+            token_to_net_comp_pairs = None
+            current_file_comp_pair = None
+
         # Build sorted list with ratios, type breakdowns, and other components
         comp_size = comp_sizes.get(target_cid, 0)
         protein_counts_list = []
@@ -826,6 +986,12 @@ def get_component_proteins_by_node(req: ByNodeRequest) -> Any:
             if token_to_comp_set_file is not None:
                 comp_set_f = token_to_comp_set_file.get(protein, set())
                 other_file = max(0, len(comp_set_f) - (1 if (target_file_cid is not None and target_file_cid in comp_set_f) else 0))
+            other_network = None
+            if token_to_net_comp_pairs is not None:
+                pairs = token_to_net_comp_pairs.get(protein, set())
+                if pairs:
+                    subtract = 1 if (current_file_comp_pair is not None and current_file_comp_pair in pairs) else 0
+                    other_network = max(0, len(pairs) - subtract)
             protein_counts_list.append(
                 ComponentProteinCount(
                     protein=protein,
@@ -834,6 +1000,7 @@ def get_component_proteins_by_node(req: ByNodeRequest) -> Any:
                     ratio=ratio,
                     type_ratios=dict(sorted(trate.items(), key=lambda kv: (-kv[1], kv[0]))) if trate else None,
                     other_components=other_file if other_file is not None else other_graph,
+                    other_components_network=other_network,
                 )
             )
         protein_counts_list.sort(key=lambda x: (-x.count, x.protein))

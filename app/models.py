@@ -111,3 +111,38 @@ class TokenPayload(SQLModel):
 class NewPassword(SQLModel):
     token: str
     new_password: str = Field(min_length=8, max_length=40)
+
+
+# Favorite components
+class FavoriteComponentBase(SQLModel):
+    network_name: str = Field(min_length=1, max_length=255, index=True)
+    filename: str = Field(min_length=1, max_length=1024)
+    component_id: int = Field(ge=0)
+    title: str | None = Field(default=None, max_length=255)
+    description: str | None = Field(default=None, max_length=255)
+
+
+class FavoriteComponentCreate(FavoriteComponentBase):
+    pass
+
+
+class FavoriteComponentUpdate(SQLModel):
+    title: str | None = Field(default=None, max_length=255)
+    description: str | None = Field(default=None, max_length=255)
+
+
+class FavoriteComponent(FavoriteComponentBase, table=True):
+    __tablename__ = "favorite_component"
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    owner_id: uuid.UUID = Field(foreign_key="user.id", nullable=False, ondelete="CASCADE")
+    owner: User | None = Relationship()
+
+
+class FavoriteComponentPublic(FavoriteComponentBase):
+    id: uuid.UUID
+    owner_id: uuid.UUID
+
+
+class FavoriteComponentsPublic(SQLModel):
+    data: list[FavoriteComponentPublic]
+    count: int

@@ -50,24 +50,22 @@ def _verify_database_initialized() -> None:
         # Ensure DB is reachable
         session.exec(select(1))
 
-        # Ensure required tables exist (migrations applied)
+        # Always attempt to apply migrations on startup to keep schema up-to-date
+        try:
+            _run_migrations()
+        except Exception:
+            logger.exception("Alembic migration attempt failed")
+
+        # Ensure required tables exist (as a safety net on fresh installs)
         inspector = inspect(engine)
         required_tables = ["alembic_version", "user", "item"]
         missing = [t for t in required_tables if not inspector.has_table(t)]
         if missing:
             logger.warning(
-                "Missing tables detected (%s). Attempting to run Alembic migrations...",
+                "Missing required tables after migration (%s). Creating metadata...",
                 ", ".join(missing),
             )
-            _run_migrations()
-            inspector = inspect(engine)
-            missing_after = [t for t in required_tables if not inspector.has_table(t)]
-            if missing_after:
-                logger.warning(
-                    "Tables still missing after migrations (%s). Creating metadata...",
-                    ", ".join(missing_after),
-                )
-                SQLModel.metadata.create_all(engine)
+            SQLModel.metadata.create_all(engine)
 
         # Ensure initial data (e.g., first superuser)
         init_db(session)
