@@ -7,6 +7,12 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 from app.api.routes.networks import _load_sgd_sys_to_gene_map, parse_gdf_to_cytoscape
+from app.uniprot_client import (
+    ProteinFeature,
+    ProteinFeatureData,
+    ProteinFeaturesResponse,
+    fetch_multiple_proteins,
+)
 
 
 router = APIRouter(tags=["proteins"], prefix="/proteins")
@@ -614,3 +620,61 @@ def search_components_by_id(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error searching components: {str(e)}")
+
+
+
+@router.get("/{network_name}/features", response_model=ProteinFeaturesResponse)
+async def get_protein_features(
+    network_name: str,
+    proteins: str = Query(..., description="Comma-separated list of protein identifiers"),
+    name_mode: Literal["systematic", "gene"] = Query("systematic"),
+    organism_id: str = Query("559292", description="NCBI taxonomy ID (default: S. cerevisiae)"),
+) -> Any:
+    """
+    Fetch protein sequence features from UniProt for multiple proteins.
+
+    Returns sequence length and feature annotations (domains, regions, motifs, etc.)
+    for each requested protein. Handles partial failures gracefully by returning
+    error messages for failed proteins while providing data for successful ones.
+
+    Args:
+        network_name: Network name (for validation/context)
+        proteins: Comma-separated protein identifiers
+        name_mode: Whether to use systematic or gene names
+        organism_id: NCBI taxonomy ID for organism filtering
+
+    Returns:
+        ProteinFeaturesResponse with data for each protein
+    """
+    try:
+        # Validate network exists (optional, for consistency with other endpoints)
+        try:
+            _read_network_dir(network_name)
+        except HTTPException:
+            # Network validation is optional - we can still fetch UniProt data
+            logger.warning(f"Network '{network_name}' not found, proceeding with UniProt fetch")
+
+        # Parse protein list
+        protein_list = [p.strip() for p in proteins.split(",") if p.strip()]
+        if not protein_list:
+            raise HTTPException(status_code=400, detail="No proteins specified")
+
+        if len(protein_list) > 50:
+            raise HTTPException(
+                status_code=400,
+                detail="Too many proteins requested (max 50 per request)",
+            )
+
+        # Fetch protein features in parallel
+        logger.info(f"Fetching features for {len(protein_list)} proteins")
+        results = await fetch_multiple_proteins(protein_list, organism_id)
+
+        return ProteinFeaturesResponse(proteins=results)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching protein features: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Error fetching protein features: {str(e)}"
+        )
