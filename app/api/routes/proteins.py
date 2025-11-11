@@ -8,6 +8,8 @@ from pydantic import BaseModel
 
 from app.api.routes.networks import _load_sgd_sys_to_gene_map, parse_gdf_to_cytoscape
 from app.uniprot_client import (
+    GOTerm,
+    GOTermsByDomain,
     ProteinFeature,
     ProteinFeatureData,
     ProteinFeaturesResponse,

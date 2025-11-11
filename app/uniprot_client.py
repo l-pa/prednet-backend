@@ -20,12 +20,30 @@ class ProteinFeature(BaseModel):
     end: int
 
 
+class GOTerm(BaseModel):
+    """Represents a single GO term annotation."""
+
+    id: str  # GO:0006936
+    name: str  # muscle contraction
+    parents: list[str] = []  # Parent GO IDs (for future hierarchy support)
+    evidence: str | None = None  # Evidence code (IDA, IPI, etc.)
+
+
+class GOTermsByDomain(BaseModel):
+    """GO terms organized by domain."""
+
+    biological_process: list[GOTerm] = []
+    cellular_component: list[GOTerm] = []
+    molecular_function: list[GOTerm] = []
+
+
 class ProteinFeatureData(BaseModel):
     """Represents protein data with features for a single protein."""
 
     protein: str
     sequence_length: int | None
     features: list[ProteinFeature]
+    go_terms: GOTermsByDomain | None = None
     error: str | None
 
 
@@ -128,7 +146,8 @@ class UniProtClient:
                         "ft_helix,ft_strand,ft_turn,"  # Secondary structure
                         "ft_compbias,ft_disulfid,ft_crosslnk,"  # Structural
                         "ft_mod_res,ft_lipid,ft_carbohyd,"  # PTMs
-                        "ft_var_seq,ft_variant,ft_mutagen,ft_conflict"  # Variations
+                        "ft_var_seq,ft_variant,ft_mutagen,ft_conflict,"  # Variations
+                        "go,go_p,go_c,go_f"  # GO terms
                     ),
                     "size": "1",  # Only need first result
                 }
@@ -232,10 +251,14 @@ class UniProtClient:
                         )
                     )
 
+            # Extract GO terms
+            go_terms = self._parse_go_terms(entry)
+
             return ProteinFeatureData(
                 protein=protein_id,
                 sequence_length=sequence_length,
                 features=features,
+                go_terms=go_terms,
                 error=None,
             )
 
@@ -245,8 +268,99 @@ class UniProtClient:
                 protein=protein_id,
                 sequence_length=None,
                 features=[],
+                go_terms=None,
                 error=f"Error parsing UniProt data: {str(e)}",
             )
+
+    def _parse_go_terms(self, entry: dict[str, Any]) -> GOTermsByDomain | None:
+        """
+        Parse GO terms from UniProt response.
+        
+        UniProt returns GO terms in uniProtKBCrossReferences with database="GO".
+        Each GO term has properties including:
+        - GoTerm: "P:muscle contraction" (domain prefix + term name)
+        - GoEvidenceType: "IDA:SGD" (evidence code + source)
+        """
+        try:
+            cross_refs = entry.get("uniProtKBCrossReferences", [])
+            
+            # Organize GO terms by domain
+            biological_process: list[GOTerm] = []
+            cellular_component: list[GOTerm] = []
+            molecular_function: list[GOTerm] = []
+            
+            for ref in cross_refs:
+                if ref.get("database") != "GO":
+                    continue
+                
+                go_id = ref.get("id", "")
+                if not go_id:
+                    continue
+                
+                # Extract properties
+                properties = ref.get("properties", [])
+                go_term_value = None
+                evidence_code = None
+                
+                for prop in properties:
+                    key = prop.get("key", "")
+                    value = prop.get("value", "")
+                    
+                    if key == "GoTerm":
+                        go_term_value = value
+                    elif key == "GoEvidenceType":
+                        # Extract evidence code (before colon)
+                        if ":" in value:
+                            evidence_code = value.split(":")[0]
+                        else:
+                            evidence_code = value
+                
+                if not go_term_value:
+                    continue
+                
+                # Parse domain and term name from GoTerm value
+                # Format: "P:muscle contraction" or "C:cytoplasm" or "F:actin binding"
+                if ":" in go_term_value:
+                    domain_prefix, term_name = go_term_value.split(":", 1)
+                    domain_prefix = domain_prefix.strip()
+                    term_name = term_name.strip()
+                else:
+                    # Fallback if format is unexpected
+                    domain_prefix = ""
+                    term_name = go_term_value.strip()
+                
+                # Create GO term object
+                go_term = GOTerm(
+                    id=go_id,
+                    name=term_name,
+                    parents=[],  # UniProt doesn't provide parent info directly
+                    evidence=evidence_code,
+                )
+                
+                # Categorize by domain
+                if domain_prefix == "P":
+                    biological_process.append(go_term)
+                elif domain_prefix == "C":
+                    cellular_component.append(go_term)
+                elif domain_prefix == "F":
+                    molecular_function.append(go_term)
+                else:
+                    # Unknown domain, skip or log warning
+                    logger.warning(f"Unknown GO domain prefix: {domain_prefix} for {go_id}")
+            
+            # Return None if no GO terms found
+            if not biological_process and not cellular_component and not molecular_function:
+                return None
+            
+            return GOTermsByDomain(
+                biological_process=biological_process,
+                cellular_component=cellular_component,
+                molecular_function=molecular_function,
+            )
+        
+        except Exception as e:
+            logger.error(f"Error parsing GO terms: {str(e)}")
+            return None
 
 
 async def fetch_multiple_proteins(
