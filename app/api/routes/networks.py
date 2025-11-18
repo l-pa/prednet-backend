@@ -9,6 +9,51 @@ from pydantic import BaseModel, Field
 
 router = APIRouter(tags=["networks"], prefix="/networks")
 
+def _data_root() -> str:
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    data_root = os.path.join(current_dir, "..", "..", "data")
+    return os.path.abspath(data_root)
+
+def _safe_join_under(root_dir: str, *parts: str) -> str:
+    candidate = os.path.abspath(os.path.join(root_dir, *parts))
+    root_dir_abs = os.path.abspath(root_dir)
+    if not (candidate == root_dir_abs or candidate.startswith(root_dir_abs + os.sep)):
+        raise HTTPException(status_code=400, detail="Invalid path")
+    return candidate
+
+def _resolve_network_dir(network_name: str) -> str:
+    """
+    Resolve a network directory under the data root, supporting the new layout:
+    data/{Organism}/{NetworkName}/ with Organism in {"Yeast", "Human"}.
+    If network_name already contains a path like 'Human/Foo', it is used directly
+    (with path traversal protection). If it is a bare name, we search both organisms.
+    """
+    data_root = _data_root()
+    if not os.path.exists(data_root):
+        raise HTTPException(status_code=404, detail="Data directory not found")
+
+    # Direct path (may include organism)
+    direct_path = _safe_join_under(data_root, network_name)
+    if os.path.isdir(direct_path):
+        return direct_path
+
+    # Bare network name: search standard organism folders
+    candidates: list[str] = []
+    for org in ("Yeast", "Human"):
+        p = _safe_join_under(data_root, org, network_name)
+        if os.path.isdir(p):
+            candidates.append(p)
+    if not candidates:
+        raise HTTPException(status_code=404, detail=f"Network '{network_name}' not found")
+    if len(candidates) > 1:
+        raise HTTPException(status_code=400, detail=f"Network name '{network_name}' is ambiguous across organisms; use 'Organism/{network_name}'")
+    return candidates[0]
+
+def _iter_gdf_files(dir_path: str) -> list[str]:
+    files = [f for f in os.listdir(dir_path) if f.endswith(".gdf") and os.path.isfile(os.path.join(dir_path, f))]
+    files.sort()
+    return files
+
 
 class NetworkInfo(BaseModel):
     name: str
@@ -47,30 +92,25 @@ def get_networks() -> Any:
     Returns network names and GDF file counts for each network.
     """
     try:
-        # Get the path to the data directory relative to this file
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        data_path = os.path.join(current_dir, "..", "..", "data")
-        data_path = os.path.abspath(data_path)
+        data_path = _data_root()
 
         if not os.path.exists(data_path):
             raise HTTPException(status_code=404, detail="Data directory not found")
 
         networks = []
 
-        # Get all directories in the data folder
-        for item in os.listdir(data_path):
-            item_path = os.path.join(data_path, item)
-
-            # Only include directories
-            if os.path.isdir(item_path):
-                # Count only GDF files in the directory
-                gdf_files = [f for f in os.listdir(item_path) if f.endswith('.gdf')]
-                file_count = len(gdf_files)
-
-                networks.append(NetworkInfo(
-                    name=item,
-                    file_count=file_count
-                ))
+        # New layout: data/{Organism}/{NetworkName}/
+        for organism in ("Yeast", "Human"):
+            org_dir = os.path.join(data_path, organism)
+            if not os.path.isdir(org_dir):
+                continue
+            for item in os.listdir(org_dir):
+                net_dir = os.path.join(org_dir, item)
+                if os.path.isdir(net_dir):
+                    gdf_files = [f for f in os.listdir(net_dir) if f.endswith(".gdf")]
+                    file_count = len(gdf_files)
+                    # Expose name as "Organism/NetworkName" so downstream routes work unchanged
+                    networks.append(NetworkInfo(name=f"{organism}/{item}", file_count=file_count))
 
         # Sort networks by name for consistent ordering
         networks.sort(key=lambda x: x.name)
@@ -118,26 +158,15 @@ def _load_sgd_sys_to_gene_map() -> dict[str, str]:
         return {}
 
 
-@router.get("/{network_name}/files", response_model=list[str])
+@router.get("/{network_name:path}/files", response_model=list[str])
 def get_network_files(network_name: str) -> Any:
     """
     Get list of GDF files for a specific network.
     """
     try:
-        # Get the path to the data directory relative to this file
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        data_path = os.path.join(current_dir, "..", "..", "data", network_name)
-        data_path = os.path.abspath(data_path)
+        data_path = _resolve_network_dir(network_name)
 
-        if not os.path.exists(data_path):
-            raise HTTPException(status_code=404, detail=f"Network '{network_name}' not found")
-
-        if not os.path.isdir(data_path):
-            raise HTTPException(status_code=400, detail=f"'{network_name}' is not a directory")
-
-        # Get only GDF files in the network directory
-        gdf_files = [f for f in os.listdir(data_path) if f.endswith('.gdf') and os.path.isfile(os.path.join(data_path, f))]
-        gdf_files.sort()  # Sort for consistent ordering
+        gdf_files = _iter_gdf_files(data_path)
 
         return gdf_files
 
@@ -301,16 +330,15 @@ def get_sgd_details(body: SGDDetailsRequest) -> Any:
         raise HTTPException(status_code=500, detail=f"Error reading SGD details: {str(e)}")
 
 
-@router.get("/{network_name}/gdf/{filename}", response_model=CytoscapeGraph)
+@router.get("/{network_name:path}/gdf/{filename}", response_model=CytoscapeGraph)
 def get_gdf_file(network_name: str, filename: str) -> Any:
     """
     Read a GDF file and convert it to Cytoscape.js format.
     """
     try:
-        # Get the path to the GDF file
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        file_path = os.path.join(current_dir, "..", "..", "data", network_name, filename)
-        file_path = os.path.abspath(file_path)
+        # Resolve the path to the GDF file under the network directory
+        net_dir = _resolve_network_dir(network_name)
+        file_path = _safe_join_under(net_dir, filename)
 
         if not os.path.exists(file_path):
             raise HTTPException(status_code=404, detail=f"File '{filename}' not found in network '{network_name}'")
@@ -719,9 +747,8 @@ def get_component_proteins_by_node(req: ByNodeRequest) -> Any:
         target_file_cid: int | None = None
         try:
             if req.network and req.filename:
-                current_dir = os.path.dirname(os.path.abspath(__file__))
-                file_path = os.path.join(current_dir, "..", "..", "data", str(req.network), str(req.filename))
-                file_path = os.path.abspath(file_path)
+                net_dir_v = _resolve_network_dir(str(req.network))
+                file_path = _safe_join_under(net_dir_v, str(req.filename))
                 if os.path.exists(file_path) and file_path.endswith(".gdf"):
                     # minimal parse for components and tokens
                     # read nodes and edges
@@ -841,9 +868,7 @@ def get_component_proteins_by_node(req: ByNodeRequest) -> Any:
         current_file_comp_pair: tuple[str, int] | None = None
         try:
             if req.network:
-                current_dir = os.path.dirname(os.path.abspath(__file__))
-                network_dir = os.path.join(current_dir, "..", "..", "data", str(req.network))
-                network_dir = os.path.abspath(network_dir)
+                network_dir = _resolve_network_dir(str(req.network))
                 if os.path.isdir(network_dir):
                     token_to_net_comp_pairs = {}
                     import glob as _glob

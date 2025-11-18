@@ -6,12 +6,13 @@ from typing import Any, Literal
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
-from app.api.routes.networks import _load_sgd_sys_to_gene_map, parse_gdf_to_cytoscape
+from app.api.routes.networks import (
+    _load_sgd_sys_to_gene_map,
+    parse_gdf_to_cytoscape,
+    _resolve_network_dir,
+    _data_root,
+)
 from app.uniprot_client import (
-    GOTerm,
-    GOTermsByDomain,
-    ProteinFeature,
-    ProteinFeatureData,
     ProteinFeaturesResponse,
     fetch_multiple_proteins,
 )
@@ -35,14 +36,11 @@ class PagedProteins(BaseModel):
 
 
 def _read_network_dir(network_name: str) -> str:
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    data_path = os.path.join(current_dir, "..", "..", "data", network_name)
-    data_path = os.path.abspath(data_path)
-    if not os.path.exists(data_path):
-        raise HTTPException(status_code=404, detail=f"Network '{network_name}' not found")
-    if not os.path.isdir(data_path):
-        raise HTTPException(status_code=400, detail=f"'{network_name}' is not a directory")
-    return data_path
+    try:
+        return _resolve_network_dir(network_name)
+    except HTTPException:
+        # Re-raise preserving the same messages/status codes
+        raise
 
 
 def _iter_gdf_files(dir_path: str) -> list[str]:
@@ -127,119 +125,8 @@ def _collect_proteins_from_gdf(file_path: str, *, name_mode: Literal["systematic
     return token_to_types
 
 
-@router.get("/{network_name}", response_model=PagedProteins)
-def get_proteins(
-    network_name: str,
-    page: int = Query(1, ge=1),
-    size: int = Query(50, ge=1, le=500),
-    q: str | None = Query(default=None, description="Space-separated protein names to filter by"),
-    selected: str | None = Query(default=None, description="Space-separated selected proteins; return only proteins that co-occur in same components across files"),
-    name_mode: Literal["systematic", "gene"] = Query("systematic"),
-) -> Any:
-    """
-    Aggregate unique proteins across all GDFs in a network.
-
-    - Extract tokens from the node 'label' field (split by whitespace). If no 'label'
-      field exists, fall back to 'name' or the first column.
-    - Return a paginated list of unique proteins with the list of GDF files they appear in.
-    """
-    try:
-        dir_path = _read_network_dir(network_name)
-        gdf_files = _iter_gdf_files(dir_path)
-
-        sgd_map = _load_sgd_sys_to_gene_map()
-        protein_to_files: dict[str, set[str]] = {}
-        protein_to_types: dict[str, set[str]] = {}
-
-        for filename in gdf_files:
-            file_path = os.path.join(dir_path, filename)
-            try:
-                token_types_map = _collect_proteins_from_gdf(file_path, name_mode=name_mode, sgd_map=sgd_map)
-            except Exception:
-                # Skip malformed files but continue processing others
-                # Alternatively, raise a 500; here we choose resilience
-                token_types_map = {}
-            for token, types in token_types_map.items():
-                if token not in protein_to_files:
-                    protein_to_files[token] = set()
-                protein_to_files[token].add(filename)
-                if token not in protein_to_types:
-                    protein_to_types[token] = set()
-                protein_to_types[token].update(types)
-
-        all_proteins = sorted(protein_to_files.keys())
-
-        # Optional component-based filtering by selected proteins
-        if selected:
-            selected_terms = [t for t in selected.split() if t]
-            selected_set = set(selected_terms)
-            if selected_set:
-                allowed_tokens: set[str] = set()
-                for filename in gdf_files:
-                    file_path = os.path.join(dir_path, filename)
-                    try:
-                        node_ids, edges, node_to_tokens, _ = _parse_nodes_and_edges(file_path, name_mode=name_mode, sgd_map=sgd_map)
-                        node_to_comp, _comp_sizes = _compute_components(node_ids, edges)
-                    except Exception:
-                        continue
-
-                    # Build comp -> tokens present in that component
-                    comp_to_tokens: dict[int, set[str]] = {}
-                    for node_id, tokens in node_to_tokens.items():
-                        cid = node_to_comp.get(node_id)
-                        if cid is None:
-                            continue
-                        if cid not in comp_to_tokens:
-                            comp_to_tokens[cid] = set()
-                        comp_to_tokens[cid].update(tokens)
-                    # Keep only components that contain ALL selected tokens
-                    for _cid, tokens_in_comp in comp_to_tokens.items():
-                        if selected_set.issubset(tokens_in_comp):
-                            allowed_tokens.update(tokens_in_comp)
-
-                # If no components matched (edge case), fall back to at least showing the selected tokens
-                if not allowed_tokens:
-                    allowed_tokens = set(selected_set)
-                # Intersect proteins with allowed tokens
-                all_proteins = [p for p in all_proteins if p in allowed_tokens]
-
-        # Optional filtering by space-separated partial tokens (case-insensitive)
-        if q:
-            logger.info(f"Searching for proteins: {q}")
-            terms = [t.strip().lower() for t in (q.split() if q else []) if t.strip()]
-            if terms:
-                # Filter proteins that contain any of the search terms in either systematic or gene names
-                filtered_proteins = []
-                for p in all_proteins:
-                    # Check if any search term matches the protein name (case-insensitive)
-                    protein_lower = p.lower()
-                    gene_name = sgd_map.get(p.upper(), p)
-                    gene_name_lower = gene_name.lower()
-
-                    # Check if any term matches either the systematic name or gene name
-                    if any(term in protein_lower for term in terms) or any(term in gene_name_lower for term in terms):
-                        filtered_proteins.append(p)
-
-                all_proteins = filtered_proteins
-        total = len(all_proteins)
-
-        start = (page - 1) * size
-        end = start + size
-        if start >= total and total != 0:
-            raise HTTPException(status_code=400, detail="Page out of range")
-
-        paged = all_proteins[start:end]
-        items = []
-        for p in paged:
-            files_sorted = sorted(protein_to_files.get(p, set()))
-            types_sorted = sorted(protein_to_types.get(p, set()))
-            items.append(ProteinItem(protein=p, files=files_sorted, types=types_sorted))
-
-        return PagedProteins(items=items, total=total, page=page, size=size)
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error aggregating proteins: {str(e)}")
+# NOTE: Define the generic catch-all route AFTER all more specific routes to avoid shadowing.
+# get_proteins route moved below to avoid shadowing specific routes
 
 
 class ComponentsRequest(BaseModel):
@@ -385,7 +272,7 @@ def _compute_components(node_ids: list[str], edges: list[tuple[str, str]]) -> tu
     return node_to_comp, comp_sizes
 
 
-@router.post("/{network_name}/components", response_model=ComponentsResponse)
+@router.post("/{network_name:path}/components", response_model=ComponentsResponse)
 def get_components_membership(network_name: str, body: ComponentsRequest) -> Any:
     try:
         dir_path = _read_network_dir(network_name)
@@ -463,7 +350,7 @@ class SubgraphGraph(BaseModel):
     edges: list[SubgraphEdge]
 
 
-@router.get("/{network_name}/components/{filename}/{component_id}", response_model=SubgraphGraph)
+@router.get("/{network_name:path}/components/{filename}/{component_id}", response_model=SubgraphGraph)
 def get_component_subgraph(
     network_name: str,
     filename: str,
@@ -527,7 +414,7 @@ class PagedComponents(BaseModel):
     size: int
 
 
-@router.get("/{network_name}/components/search", response_model=PagedComponents)
+@router.get("/{network_name:path}/components/search", response_model=PagedComponents)
 def search_components_by_id(
     network_name: str,
     page: int = Query(1, ge=1),
@@ -625,7 +512,7 @@ def search_components_by_id(
 
 
 
-@router.get("/{network_name}/features", response_model=ProteinFeaturesResponse)
+@router.get("/{network_name:path}/features", response_model=ProteinFeaturesResponse)
 async def get_protein_features(
     network_name: str,
     proteins: str = Query(..., description="Comma-separated list of protein identifiers"),
@@ -667,9 +554,26 @@ async def get_protein_features(
                 detail="Too many proteins requested (max 50 per request)",
             )
 
+        # Infer organism by network location when possible (data/{Organism}/{Network})
+        organism_effective = organism_id
+        try:
+            net_dir = _resolve_network_dir(network_name)
+            rel = os.path.relpath(net_dir, _data_root())
+            org = rel.split(os.sep)[0] if rel and rel != "." else ""
+            if org == "Human":
+                organism_effective = "9606"
+            elif org == "Yeast":
+                organism_effective = "559292"
+        except HTTPException:
+            # If network not found, fall back to provided organism_id
+            pass
+
+        # Touch name_mode to satisfy linters; currently not used in UniProt fetch
+        _ = name_mode
+
         # Fetch protein features in parallel
         logger.info(f"Fetching features for {len(protein_list)} proteins")
-        results = await fetch_multiple_proteins(protein_list, organism_id)
+        results = await fetch_multiple_proteins(protein_list, organism_effective)
 
         return ProteinFeaturesResponse(proteins=results)
 
@@ -680,3 +584,118 @@ async def get_protein_features(
         raise HTTPException(
             status_code=500, detail=f"Error fetching protein features: {str(e)}"
         )
+
+
+@router.get("/{network_name:path}", response_model=PagedProteins)
+def get_proteins(
+    network_name: str,
+    page: int = Query(1, ge=1),
+    size: int = Query(50, ge=1, le=500),
+    q: str | None = Query(default=None, description="Space-separated protein names to filter by"),
+    selected: str | None = Query(default=None, description="Space-separated selected proteins; return only proteins that co-occur in same components across files"),
+    name_mode: Literal["systematic", "gene"] = Query("systematic"),
+) -> Any:
+    """
+    Aggregate unique proteins across all GDFs in a network.
+
+    - Extract tokens from the node 'label' field (split by whitespace). If no 'label'
+      field exists, fall back to 'name' or the first column.
+    - Return a paginated list of unique proteins with the list of GDF files they appear in.
+    """
+    try:
+        dir_path = _read_network_dir(network_name)
+        gdf_files = _iter_gdf_files(dir_path)
+
+        sgd_map = _load_sgd_sys_to_gene_map()
+        protein_to_files: dict[str, set[str]] = {}
+        protein_to_types: dict[str, set[str]] = {}
+
+        for filename in gdf_files:
+            file_path = os.path.join(dir_path, filename)
+            try:
+                token_types_map = _collect_proteins_from_gdf(file_path, name_mode=name_mode, sgd_map=sgd_map)
+            except Exception:
+                # Skip malformed files but continue processing others
+                # Alternatively, raise a 500; here we choose resilience
+                token_types_map = {}
+            for token, types in token_types_map.items():
+                if token not in protein_to_files:
+                    protein_to_files[token] = set()
+                protein_to_files[token].add(filename)
+                if token not in protein_to_types:
+                    protein_to_types[token] = set()
+                protein_to_types[token].update(types)
+
+        all_proteins = sorted(protein_to_files.keys())
+
+        # Optional component-based filtering by selected proteins
+        if selected:
+            selected_terms = [t for t in selected.split() if t]
+            selected_set = set(selected_terms)
+            if selected_set:
+                allowed_tokens: set[str] = set()
+                for filename in gdf_files:
+                    file_path = os.path.join(dir_path, filename)
+                    try:
+                        node_ids, edges, node_to_tokens, _ = _parse_nodes_and_edges(file_path, name_mode=name_mode, sgd_map=sgd_map)
+                        node_to_comp, _comp_sizes = _compute_components(node_ids, edges)
+                    except Exception:
+                        continue
+
+                    # Build comp -> tokens present in that component
+                    comp_to_tokens: dict[int, set[str]] = {}
+                    for node_id, tokens in node_to_tokens.items():
+                        cid = node_to_comp.get(node_id)
+                        if cid is None:
+                            continue
+                        if cid not in comp_to_tokens:
+                            comp_to_tokens[cid] = set()
+                        comp_to_tokens[cid].update(tokens)
+                    # Keep only components that contain ALL selected tokens
+                    for _cid, tokens_in_comp in comp_to_tokens.items():
+                        if selected_set.issubset(tokens_in_comp):
+                            allowed_tokens.update(tokens_in_comp)
+
+                # If no components matched (edge case), fall back to at least showing the selected tokens
+                if not allowed_tokens:
+                    allowed_tokens = set(selected_set)
+                # Intersect proteins with allowed tokens
+                all_proteins = [p for p in all_proteins if p in allowed_tokens]
+
+        # Optional filtering by space-separated partial tokens (case-insensitive)
+        if q:
+            logger.info(f"Searching for proteins: {q}")
+            terms = [t.strip().lower() for t in (q.split() if q else []) if t.strip()]
+            if terms:
+                # Filter proteins that contain any of the search terms in either systematic or gene names
+                filtered_proteins = []
+                for p in all_proteins:
+                    # Check if any search term matches the protein name (case-insensitive)
+                    protein_lower = p.lower()
+                    gene_name = sgd_map.get(p.upper(), p)
+                    gene_name_lower = gene_name.lower()
+
+                    # Check if any term matches either the systematic name or gene name
+                    if any(term in protein_lower for term in terms) or any(term in gene_name_lower for term in terms):
+                        filtered_proteins.append(p)
+
+                all_proteins = filtered_proteins
+        total = len(all_proteins)
+
+        start = (page - 1) * size
+        end = start + size
+        if start >= total and total != 0:
+            raise HTTPException(status_code=400, detail="Page out of range")
+
+        paged = all_proteins[start:end]
+        items = []
+        for p in paged:
+            files_sorted = sorted(protein_to_files.get(p, set()))
+            types_sorted = sorted(protein_to_types.get(p, set()))
+            items.append(ProteinItem(protein=p, files=files_sorted, types=types_sorted))
+
+        return PagedProteins(items=items, total=total, page=page, size=size)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error aggregating proteins: {str(e)}")
