@@ -14,7 +14,12 @@ from app.api.routes.networks import (
 )
 from app.uniprot_client import (
     ProteinFeaturesResponse,
-    fetch_multiple_proteins,
+    fetch_multiple_proteins as fetch_uniprot_proteins,
+)
+from app import stringdb_client
+from app.go_hierarchy_client import (
+    get_go_hierarchy_client,
+    GOHierarchyResponse,
 )
 
 
@@ -151,6 +156,113 @@ class ComponentsResponse(BaseModel):
     files: list[FileComponents]
 
 
+def _parse_nodes_and_edges_with_types(file_path: str, *, name_mode: Literal["systematic", "gene"], sgd_map: dict[str, str]) -> tuple[list[str], list[tuple[str, str]], dict[str, set[str]], dict[str, str], list[tuple[str, str, str]], dict[str, str]]:
+    """Parse nodes and edges, returning edge types and node types as well.
+    
+    Returns:
+        - node_ids: list of node IDs
+        - edges: list of (source, target) tuples
+        - node_to_tokens: dict mapping node ID to set of protein tokens
+        - node_to_label: dict mapping node ID to label
+        - edges_with_types: list of (source, target, type) tuples
+        - node_to_type: dict mapping node ID to node type
+    """
+    node_ids: list[str] = []
+    edges: list[tuple[str, str]] = []
+    edges_with_types: list[tuple[str, str, str]] = []
+    node_to_tokens: dict[str, set[str]] = {}
+    node_to_label: dict[str, str] = {}
+    node_to_type: dict[str, str] = {}
+
+    with open(file_path, encoding="utf-8") as fh:
+        in_nodes = False
+        in_edges = False
+        node_attr_names: list[str] = []
+        edge_attr_names: list[str] = []
+        label_index: int | None = None
+        id_index: int | None = None
+        node_type_index: int | None = None
+        node1_index: int | None = None
+        node2_index: int | None = None
+        edge_type_index: int | None = None
+
+        for raw_line in fh:
+            line = raw_line.strip()
+            if not line:
+                continue
+            if line.startswith("nodedef>"):
+                in_nodes = True
+                in_edges = False
+                header = line[len("nodedef>") :]
+                parts = [part.strip() for part in header.split(",")]
+                node_attr_names = []
+                for p in parts:
+                    first = p.split()[0]
+                    first = first.split(":")[0]
+                    node_attr_names.append(first)
+                # Determine indices
+                label_index = node_attr_names.index("label") if "label" in node_attr_names else None
+                if label_index is None and "name" in node_attr_names:
+                    label_index = node_attr_names.index("name")
+                id_index = node_attr_names.index("name") if "name" in node_attr_names else (node_attr_names.index("id") if "id" in node_attr_names else 0)
+                node_type_index = node_attr_names.index("type") if "type" in node_attr_names else None
+                continue
+            if line.startswith("edgedef>"):
+                in_nodes = False
+                in_edges = True
+                header = line[len("edgedef>") :]
+                parts = [part.strip() for part in header.split(",")]
+                edge_attr_names = []
+                for p in parts:
+                    first = p.split()[0]
+                    first = first.split(":")[0]
+                    edge_attr_names.append(first)
+                node1_index = edge_attr_names.index("node1") if "node1" in edge_attr_names else None
+                node2_index = edge_attr_names.index("node2") if "node2" in edge_attr_names else None
+                edge_type_index = edge_attr_names.index("type") if "type" in edge_attr_names else None
+                continue
+            if in_nodes and node_attr_names:
+                for row in csv.reader([line], delimiter=",", quotechar="'", skipinitialspace=True):
+                    if id_index is None or id_index >= len(row):
+                        continue
+                    node_id = _strip_quotes(row[id_index].strip())
+                    node_id = str(node_id)
+                    node_ids.append(node_id)
+                    # tokens
+                    tokens: set[str] = set()
+                    if label_index is not None and label_index < len(row):
+                        label_val = _strip_quotes(row[label_index].strip())
+                        node_to_label[node_id] = label_val
+                        if label_val:
+                            base_tokens = [tok.strip() for tok in label_val.split() if tok.strip()]
+                            if name_mode == "gene":
+                                tokens = {sgd_map.get(t.upper(), t) for t in base_tokens}
+                            else:
+                                tokens = set(base_tokens)
+                    node_to_tokens[node_id] = tokens
+                    # node type
+                    node_type = "unknown"
+                    if node_type_index is not None and node_type_index < len(row):
+                        node_type = _strip_quotes(row[node_type_index].strip())
+                    node_to_type[node_id] = node_type
+                continue
+            if in_edges and edge_attr_names and node1_index is not None and node2_index is not None:
+                for row in csv.reader([line], delimiter=",", quotechar="'", skipinitialspace=True):
+                    if node1_index < len(row) and node2_index < len(row):
+                        n1 = _strip_quotes(row[node1_index].strip())
+                        n2 = _strip_quotes(row[node2_index].strip())
+                        edges.append((str(n1), str(n2)))
+                        
+                        # Get edge type if available
+                        edge_type = "unknown"
+                        if edge_type_index is not None and edge_type_index < len(row):
+                            edge_type = _strip_quotes(row[edge_type_index].strip())
+                        edges_with_types.append((str(n1), str(n2), edge_type))
+                continue
+
+    return node_ids, edges, node_to_tokens, node_to_label, edges_with_types, node_to_type
+
+
 def _parse_nodes_and_edges(file_path: str, *, name_mode: Literal["systematic", "gene"], sgd_map: dict[str, str]) -> tuple[list[str], list[tuple[str, str]], dict[str, set[str]], dict[str, str]]:
     node_ids: list[str] = []
     edges: list[tuple[str, str]] = []
@@ -271,6 +383,68 @@ def _compute_components(node_ids: list[str], edges: list[tuple[str, str]]) -> tu
 
     return node_to_comp, comp_sizes
 
+
+# =============================================================================
+# GO Hierarchy Endpoint (must be before /{network_name:path} routes)
+# =============================================================================
+
+@router.get("/go-hierarchy", response_model=GOHierarchyResponse)
+async def get_go_hierarchy(
+    go_ids: str = Query(..., description="Comma-separated list of GO IDs (e.g., GO:0006936,GO:0003012)"),
+    include_ancestors: bool = Query(True, description="Include all ancestor terms in the hierarchy"),
+) -> Any:
+    """
+    Fetch GO term hierarchy from QuickGO API.
+    
+    Returns parent-child relationships and complete hierarchy information
+    for the specified GO terms. Optionally includes all ancestor terms
+    up to the root of the ontology.
+    
+    Args:
+        go_ids: Comma-separated GO IDs
+        include_ancestors: Whether to fetch all ancestor terms
+        
+    Returns:
+        GOHierarchyResponse with hierarchy information
+    """
+    try:
+        # Parse GO IDs
+        id_list = [go_id.strip() for go_id in go_ids.split(",") if go_id.strip()]
+        
+        if not id_list:
+            raise HTTPException(status_code=400, detail="No GO IDs provided")
+        
+        if len(id_list) > 200:
+            raise HTTPException(
+                status_code=400,
+                detail="Too many GO IDs requested (max 200 per request)",
+            )
+        
+        # Fetch hierarchy
+        client = get_go_hierarchy_client()
+        
+        if include_ancestors:
+            result = await client.fetch_complete_hierarchy(id_list, include_ancestors=True)
+        else:
+            result = await client.fetch_term_hierarchy(id_list)
+        
+        logger.info(f"Fetched hierarchy for {len(result.terms)} GO terms")
+        
+        return result
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching GO hierarchy: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error fetching GO hierarchy: {str(e)}",
+        )
+
+
+# =============================================================================
+# Network-specific Endpoints (/{network_name:path})
+# =============================================================================
 
 @router.post("/{network_name:path}/components", response_model=ComponentsResponse)
 def get_components_membership(network_name: str, body: ComponentsRequest) -> Any:
@@ -399,12 +573,21 @@ def get_component_subgraph(
         raise HTTPException(status_code=500, detail=f"Error building subgraph: {str(e)}")
 
 
+class EdgeTypeStats(BaseModel):
+    matched_prediction: int
+    matched_reference: int
+    prediction: int
+    reference: int
+    total: int
+
+
 class ComponentSummary(BaseModel):
     filename: str
     component_id: int
     size: int
     edges: int
     proteins_count: int
+    edge_type_stats: EdgeTypeStats | None = None
 
 
 class PagedComponents(BaseModel):
@@ -422,6 +605,15 @@ def search_components_by_id(
     q: str | None = Query(default=None, description="Search by component ID (exact number or digits)"),
     file: str | None = Query(default=None, description="Optional GDF filename to filter"),
     name_mode: Literal["systematic", "gene"] = Query("systematic"),
+    # Node type ratio filters (0.0 to 1.0)
+    min_matched_pred: float | None = Query(default=None, ge=0.0, le=1.0, description="Minimum matched prediction node ratio"),
+    max_matched_pred: float | None = Query(default=None, ge=0.0, le=1.0, description="Maximum matched prediction node ratio"),
+    min_unmatched_pred: float | None = Query(default=None, ge=0.0, le=1.0, description="Minimum unmatched prediction node ratio"),
+    max_unmatched_pred: float | None = Query(default=None, ge=0.0, le=1.0, description="Maximum unmatched prediction node ratio"),
+    min_matched_ref: float | None = Query(default=None, ge=0.0, le=1.0, description="Minimum matched reference node ratio"),
+    max_matched_ref: float | None = Query(default=None, ge=0.0, le=1.0, description="Maximum matched reference node ratio"),
+    min_unmatched_ref: float | None = Query(default=None, ge=0.0, le=1.0, description="Minimum unmatched reference node ratio"),
+    max_unmatched_ref: float | None = Query(default=None, ge=0.0, le=1.0, description="Maximum unmatched reference node ratio"),
 ) -> Any:
     try:
         dir_path = _read_network_dir(network_name)
@@ -442,16 +634,19 @@ def search_components_by_id(
         for filename in files:
             file_path = os.path.join(dir_path, filename)
             try:
-                node_ids, edges, node_to_tokens, _ = _parse_nodes_and_edges(file_path, name_mode=name_mode, sgd_map=sgd_map)
+                node_ids, edges, node_to_tokens, _, edges_with_types, node_to_type = _parse_nodes_and_edges_with_types(file_path, name_mode=name_mode, sgd_map=sgd_map)
             except Exception:
                 # Skip malformed files
                 continue
 
             node_to_comp, comp_sizes = _compute_components(node_ids, edges)
 
-            # Build per-component token sets and edge counts
+            # Build per-component token sets, edge counts, edge type statistics, and node type statistics
             comp_to_tokens: dict[int, set[str]] = {}
             comp_to_edges_count: dict[int, int] = {}
+            comp_to_edge_types: dict[int, dict[str, int]] = {}
+            comp_to_node_types: dict[int, dict[str, int]] = {}
+            
             for node_id, tokens in node_to_tokens.items():
                 cid = node_to_comp.get(node_id)
                 if cid is None:
@@ -459,11 +654,23 @@ def search_components_by_id(
                 if cid not in comp_to_tokens:
                     comp_to_tokens[cid] = set()
                 comp_to_tokens[cid].update(tokens)
-            for a, b in edges:
+                
+                # Track node types per component
+                node_type = node_to_type.get(node_id, "unknown")
+                if cid not in comp_to_node_types:
+                    comp_to_node_types[cid] = {}
+                comp_to_node_types[cid][node_type] = comp_to_node_types[cid].get(node_type, 0) + 1
+            
+            for a, b, edge_type in edges_with_types:
                 ca = node_to_comp.get(a)
                 cb = node_to_comp.get(b)
                 if ca is not None and cb is not None and ca == cb:
                     comp_to_edges_count[ca] = comp_to_edges_count.get(ca, 0) + 1
+                    
+                    # Track edge types per component
+                    if ca not in comp_to_edge_types:
+                        comp_to_edge_types[ca] = {}
+                    comp_to_edge_types[ca][edge_type] = comp_to_edge_types[ca].get(edge_type, 0) + 1
 
             # Filter by q
             q_str = (q or "").strip()
@@ -484,6 +691,59 @@ def search_components_by_id(
                         if q_str not in str(cid):
                             continue
 
+                # Compute edge type statistics for this component (for display)
+                edge_types = comp_to_edge_types.get(cid, {})
+                edge_type_stats = EdgeTypeStats(
+                    matched_prediction=edge_types.get("matched_prediction", 0),
+                    matched_reference=edge_types.get("matched_reference", 0),
+                    prediction=edge_types.get("prediction", 0),
+                    reference=edge_types.get("reference", 0),
+                    total=comp_to_edges_count.get(cid, 0),
+                )
+                
+                # Apply node type ratio filters if specified
+                if any([min_matched_pred, max_matched_pred, min_unmatched_pred, max_unmatched_pred,
+                        min_matched_ref, max_matched_ref, min_unmatched_ref, max_unmatched_ref]):
+                    node_types = comp_to_node_types.get(cid, {})
+                    total_nodes = comp_sizes.get(cid, 0)
+                    
+                    # Skip components with no nodes
+                    if total_nodes == 0:
+                        continue
+                    
+                    # Get node type counts
+                    matched_pred_nodes = node_types.get("matched_prediction", 0)
+                    unmatched_pred_nodes = node_types.get("prediction", 0)
+                    matched_ref_nodes = node_types.get("matched_reference", 0)
+                    unmatched_ref_nodes = node_types.get("reference", 0)
+                    
+                    total_pred_nodes = matched_pred_nodes + unmatched_pred_nodes
+                    total_ref_nodes = matched_ref_nodes + unmatched_ref_nodes
+                    
+                    # Calculate ratios
+                    matched_pred_ratio = matched_pred_nodes / total_pred_nodes if total_pred_nodes > 0 else 0
+                    unmatched_pred_ratio = unmatched_pred_nodes / total_pred_nodes if total_pred_nodes > 0 else 0
+                    matched_ref_ratio = matched_ref_nodes / total_ref_nodes if total_ref_nodes > 0 else 0
+                    unmatched_ref_ratio = unmatched_ref_nodes / total_ref_nodes if total_ref_nodes > 0 else 0
+                    
+                    # Apply filters
+                    if min_matched_pred is not None and matched_pred_ratio < min_matched_pred:
+                        continue
+                    if max_matched_pred is not None and matched_pred_ratio > max_matched_pred:
+                        continue
+                    if min_unmatched_pred is not None and unmatched_pred_ratio < min_unmatched_pred:
+                        continue
+                    if max_unmatched_pred is not None and unmatched_pred_ratio > max_unmatched_pred:
+                        continue
+                    if min_matched_ref is not None and matched_ref_ratio < min_matched_ref:
+                        continue
+                    if max_matched_ref is not None and matched_ref_ratio > max_matched_ref:
+                        continue
+                    if min_unmatched_ref is not None and unmatched_ref_ratio < min_unmatched_ref:
+                        continue
+                    if max_unmatched_ref is not None and unmatched_ref_ratio > max_unmatched_ref:
+                        continue
+                
                 summaries.append(
                     ComponentSummary(
                         filename=filename,
@@ -491,6 +751,7 @@ def search_components_by_id(
                         size=comp_sizes.get(cid, 0),
                         edges=comp_to_edges_count.get(cid, 0),
                         proteins_count=len(tokens),
+                        edge_type_stats=edge_type_stats,
                     )
                 )
 
@@ -518,9 +779,10 @@ async def get_protein_features(
     proteins: str = Query(..., description="Comma-separated list of protein identifiers"),
     name_mode: Literal["systematic", "gene"] = Query("systematic"),
     organism_id: str = Query("559292", description="NCBI taxonomy ID (default: S. cerevisiae)"),
+    source: Literal["uniprot", "stringdb"] = Query("uniprot", description="Data source: uniprot or stringdb"),
 ) -> Any:
     """
-    Fetch protein sequence features from UniProt for multiple proteins.
+    Fetch protein sequence features from UniProt or STRING-DB for multiple proteins.
 
     Returns sequence length and feature annotations (domains, regions, motifs, etc.)
     for each requested protein. Handles partial failures gracefully by returning
@@ -531,6 +793,7 @@ async def get_protein_features(
         proteins: Comma-separated protein identifiers
         name_mode: Whether to use systematic or gene names
         organism_id: NCBI taxonomy ID for organism filtering
+        source: Data source to use (uniprot or stringdb)
 
     Returns:
         ProteinFeaturesResponse with data for each protein
@@ -568,12 +831,16 @@ async def get_protein_features(
             # If network not found, fall back to provided organism_id
             pass
 
-        # Touch name_mode to satisfy linters; currently not used in UniProt fetch
+        # Touch name_mode to satisfy linters; currently not used in data fetch
         _ = name_mode
 
-        # Fetch protein features in parallel
-        logger.info(f"Fetching features for {len(protein_list)} proteins")
-        results = await fetch_multiple_proteins(protein_list, organism_effective)
+        # Fetch protein features in parallel from selected source
+        logger.info(f"Fetching features for {len(protein_list)} proteins from {source}")
+        
+        if source == "stringdb":
+            results = await stringdb_client.fetch_multiple_proteins(protein_list, organism_effective)
+        else:
+            results = await fetch_uniprot_proteins(protein_list, organism_effective)
 
         return ProteinFeaturesResponse(proteins=results)
 
@@ -594,6 +861,7 @@ def get_proteins(
     q: str | None = Query(default=None, description="Space-separated protein names to filter by"),
     selected: str | None = Query(default=None, description="Space-separated selected proteins; return only proteins that co-occur in same components across files"),
     name_mode: Literal["systematic", "gene"] = Query("systematic"),
+    types: str | None = Query(default=None, description="Comma-separated node types to filter by (e.g., 'prediction,reference')"),
 ) -> Any:
     """
     Aggregate unique proteins across all GDFs in a network.
@@ -601,6 +869,7 @@ def get_proteins(
     - Extract tokens from the node 'label' field (split by whitespace). If no 'label'
       field exists, fall back to 'name' or the first column.
     - Return a paginated list of unique proteins with the list of GDF files they appear in.
+    - Optionally filter by node types (e.g., prediction, matched_prediction, reference, matched_reference).
     """
     try:
         dir_path = _read_network_dir(network_name)
@@ -618,13 +887,13 @@ def get_proteins(
                 # Skip malformed files but continue processing others
                 # Alternatively, raise a 500; here we choose resilience
                 token_types_map = {}
-            for token, types in token_types_map.items():
+            for token, token_types in token_types_map.items():
                 if token not in protein_to_files:
                     protein_to_files[token] = set()
                 protein_to_files[token].add(filename)
                 if token not in protein_to_types:
                     protein_to_types[token] = set()
-                protein_to_types[token].update(types)
+                protein_to_types[token].update(token_types)
 
         all_proteins = sorted(protein_to_files.keys())
 
@@ -680,6 +949,18 @@ def get_proteins(
                         filtered_proteins.append(p)
 
                 all_proteins = filtered_proteins
+
+        # Optional filtering by node types
+        if types:
+            type_list = [t.strip() for t in types.split(",") if t.strip()]
+            if type_list:
+                type_set = set(type_list)
+                # Filter proteins that have at least one of the specified types
+                all_proteins = [
+                    p for p in all_proteins
+                    if protein_to_types.get(p, set()) & type_set
+                ]
+
         total = len(all_proteins)
 
         start = (page - 1) * size

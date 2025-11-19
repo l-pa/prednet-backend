@@ -27,6 +27,7 @@ class GOTerm(BaseModel):
     name: str  # muscle contraction
     parents: list[str] = []  # Parent GO IDs (for future hierarchy support)
     evidence: str | None = None  # Evidence code (IDA, IPI, etc.)
+    p_value: float | None = None  # Statistical significance (from STRING-DB enrichment)
 
 
 class GOTermsByDomain(BaseModel):
